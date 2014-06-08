@@ -1,0 +1,448 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+# kate: space-indent on; indent-width 4; mixedindent off; indent-mode python;
+
+import sys, os
+import argparse
+import urllib2
+import httplib
+import re
+import tempfile
+import shutil
+import platform
+from datetime import date
+from time import strptime, mktime
+from zipfile import ZipFile, BadZipfile
+from arsoft.inifile import IniFile
+
+def copytree(src, dst, symlinks=False, ignore=None):
+    """Recursively copy a directory tree using copy2().
+
+    The destination directory must not already exist.
+    If exception(s) occur, an Error is raised with a list of reasons.
+
+    If the optional symlinks flag is true, symbolic links in the
+    source tree result in symbolic links in the destination tree; if
+    it is false, the contents of the files pointed to by symbolic
+    links are copied.
+
+    The optional ignore argument is a callable. If given, it
+    is called with the `src` parameter, which is the directory
+    being visited by copytree(), and `names` which is the list of
+    `src` contents, as returned by os.listdir():
+
+        callable(src, names) -> ignored_names
+
+    Since copytree() is called recursively, the callable will be
+    called once for each directory that is copied. It returns a
+    list of names relative to the `src` directory that should
+    not be copied.
+
+    XXX Consider this example code rather than the ultimate tool.
+
+    """
+    names = os.listdir(src)
+    if ignore is not None:
+        ignored_names = ignore(src, names)
+    else:
+        ignored_names = set()
+
+    if not os.path.exists(dst):
+        os.makedirs(dst)
+    errors = []
+    for name in names:
+        if name in ignored_names:
+            continue
+        srcname = os.path.join(src, name)
+        dstname = os.path.join(dst, name)
+        try:
+            if symlinks and os.path.islink(srcname):
+                linkto = os.readlink(srcname)
+                os.symlink(linkto, dstname)
+            elif os.path.isdir(srcname):
+                copytree(srcname, dstname, symlinks, ignore)
+            else:
+                # Will raise a SpecialFileError for unsupported file types
+                shutil.copy2(srcname, dstname)
+        # catch the Error from the recursive copytree so that we can
+        # continue with other files
+        except Error as err:
+            errors.extend(err.args[0])
+        except EnvironmentError as why:
+            errors.append((srcname, dstname, str(why)))
+    try:
+        shutil.copystat(src, dst)
+    except OSError as why:
+        if WindowsError is not None and isinstance(why, WindowsError):
+            # Copying file access times may fail on Windows
+            pass
+        else:
+            errors.append((src, dst, str(why)))
+    if errors:
+        raise Error(errors)
+
+class logmx_installer(object):
+    
+    LOGMX_SERVER = 'http://www.logmx.com'
+    DOWNLOAD_URL = LOGMX_SERVER + '/p_download.php'
+    DOWNLOAD_ZIP_URL = LOGMX_SERVER + '/download_file.php?id=0'
+
+    RE_LAST_VERSION =re.compile(
+            r'^.*<SPAN\s+.*>Last version:\s*<A\s+.*>\s*<span\s+.*>v(?P<version>[0-9\.]+)\s*</span>\s*\(<span\s+.*>(?P<date>[\w \.]+)</span>\)</A>.*</SPAN>.*$'
+            )
+    RE_LAST_VERSION_ =re.compile(
+            r'^.*<SPAN\s+.*>Last version:\s*<A\s+.*>.*</A></SPAN>.*$'
+            )
+    CONFIG_DIRS = ['config', 'parsers', 'managers']
+    CONFIG_FILES = ['startup.conf']
+    MACOSX_FILES = ['logmx.command']
+    WINDOWS_FILES = ['LogMX.exe', 'LogMX-64.exe', 'LogMX.bat']
+
+    def __init__(self):
+        self._verbose = False
+        self._installer_dir = os.getcwd()
+
+    def _set_root_dir(self, root_dir=None):
+        self._rootdir = os.path.join(os.getcwd(), 'dist' if root_dir is None else root_dir)
+        self._statedir = os.path.join(self._rootdir, 'var/lib/arsoft-logmx-installer')
+        self._appdir = os.path.join(self._rootdir, 'usr/lib/logmx')
+        self._appconfdir = os.path.join(self._rootdir, 'etc/logmx')
+        self._state_inifile = os.path.join(self._statedir, 'version.conf')
+        self._appbindir = os.path.join(self._rootdir, 'usr/bin')
+
+    @staticmethod
+    def _parse_version_string(version_str):
+        ret = 0
+        elems = version_str.split('.')
+        base = 1
+        for e in elems.reserve():
+            num = int(e)
+            ret = ret + (num * base)
+            base = base * 100
+        return ret
+    @staticmethod
+    def _compare_version(lhs_version, lhs_release_date, rhs_version, rhs_release_date):
+        lhs_version_num = logmx_installer._parse_version_string(lhs_version)
+        rhs_version_num = logmx_installer._parse_version_string(rhs_version)
+        if lhs_version_num == rhs_version_num:
+            if lhs_release_date == rhs_release_date:
+                ret = 0
+            elif lhs_release_date > rhs_release_date:
+                ret = 1
+            else:
+                ret = -1
+        elif lhs_version_num > rhs_version_num:
+            ret = 1
+        else:
+            ret = -1
+        return ret
+
+    def _get_latest_version(self):
+        version = None
+        release_date = None
+        try:
+            f = urllib2.urlopen(self.DOWNLOAD_URL)
+            for line in f:
+                line = line.rstrip('\n')
+                if 'Last version' in  line:
+                    #print(line)
+                    mo = self.RE_LAST_VERSION.match(line)
+                    #print('got line: ' + line)
+                    #print('got mo: ' + str(mo))
+                    version = mo.group('version')
+                    release_date_str = mo.group('date')
+                    t = mktime(strptime(release_date_str, "%d %b %Y"))
+                    release_date = date.fromtimestamp(t)
+            ret = True
+        except urllib2.HTTPError as e:
+            ret = False
+            print('HTTPError = ' + str(e.code))
+        except urllib2.URLError as e:
+            ret = False
+            print('URLError = ' + str(e.reason))
+        except httplib.HTTPException as e:
+            ret = False
+            print('HTTPException')
+        return (ret, version, release_date)
+    
+    def _get_installed_version(self):
+        version = None
+        release_date = None
+        if os.path.exists(self._state_inifile):
+            ini = IniFile(self._state_inifile, commentPrefix=';', keyValueSeperator='=', disabled_values=False)
+            version = ini.get(None, 'version', None)
+            release_date_str = ini.get(None, 'release_date', None)
+            if release_date_str is not None:
+                t = mktime(strptime(release_date_str, "%Y-%m-%d"))
+                release_date = date.fromtimestamp(t)
+
+        # always return success because when nothing is installed it's ok as well
+        ret = True
+        return (ret, version, release_date)
+
+    def _set_installed_version(self, version, release_date):
+        ini = IniFile(self._state_inifile, commentPrefix=';', keyValueSeperator='=', disabled_values=False)
+        ini.set(None, 'version', version)
+        ini.set(None, 'release_date', '%04d-%02d-%02d' % (release_date.year, release_date.month, release_date.day) )
+        return ini.save(self._state_inifile)
+
+    def _info(self):
+        (ret, version, release_date) = self._get_latest_version()
+        if ret:
+            print(('Latest version: ' + str(version)))
+            print(('Release date: ' + str(release_date)))
+        else:
+            print('Failed to retrieve information about latest version.')
+        (ret, version, release_date) = self._get_installed_version()
+        if ret:
+            print(('Installed version: ' + str(version)))
+            print(('Release date: ' + str(release_date)))
+        else:
+            print('Failed to determined installed version.')
+        return ret
+
+    def _update(self):
+        if not os.path.exists(self._statedir):
+            os.makedirs(self._statedir)
+
+        (ret, latest_version, latest_release_date) = self._get_latest_version()
+        if ret:
+            if self._force:
+                perform_update = True
+            else:
+                (ret, installed_version, installed_release_date) = self._get_installed_version()
+                if installed_version is None:
+                    perform_update = True
+                else:
+                    res = logmx_installer._compare_version(installed_version, installed_release_date, latest_version, latest_release_date)
+                    print(res)
+                    perform_update = True if res < 0 else False
+            
+            if perform_update:
+                print(('update to %s %04d-%02d-%02d' % (latest_version, latest_release_date.year, latest_release_date.month, latest_release_date.day)))
+                zip_filename = 'logmx_%s_%04d%02d%02d.zip' % (latest_version, latest_release_date.year, latest_release_date.month, latest_release_date.day)
+                zip_file = os.path.join(self._statedir, zip_filename)
+                if not os.path.exists(zip_file) or self._force:
+                    try:
+                        zip_file_obj = open(zip_file, 'wb')
+                        print("download %s to %s" % (self.DOWNLOAD_ZIP_URL, zip_file))
+                        ret = self._http_download_file(self.DOWNLOAD_ZIP_URL, zip_file_obj)
+                        zip_file_obj.close()
+                    except IOError as e:
+                        ret = False
+                else:
+                    ret = True
+                if ret:
+                    ret = self._unpack(zip_file)
+                    if ret:
+                        self._set_installed_version(latest_version, latest_release_date)
+                    else:
+                        print(('Failed to extract LogMX from zip file %s' %(zip_file)))
+                        os.remove(zip_file)
+                else:
+                    print(('Failed to download latest LogMX zip file to %s' %(zip_file)))
+            else:
+                print('installed version is up-to-date')
+        else:
+            print('Failed to retrieve information about latest version.')
+            ret = False
+        return ret
+        
+    def _remove(self, purge=False):
+        ret = True
+        try:
+            if os.path.exists(self._statedir):
+                shutil.rmtree(self._statedir)
+        except OSError as e:
+            ret = False
+        try:
+            if os.path.exists(self._appdir):
+                shutil.rmtree(self._appdir)
+        except OSError as e:
+            ret = False
+        if purge:
+            try:
+                if os.path.exists(self._appconfdir):
+                    shutil.rmtree(self._appconfdir)
+            except OSError as e:
+                ret = False
+        return ret
+    
+    def _http_download_file(self, url, dest_file):
+        try:
+            f = urllib2.urlopen(url)
+            if f:
+                dest_file.write(f.read())
+            ret = True
+        except urllib2.HTTPError as e:
+            ret = False
+            print('HTTPError = ' + str(e.code))
+        except urllib2.URLError as e:
+            ret = False
+            print('URLError = ' + str(e.reason))
+        except httplib.HTTPException as e:
+            ret = False
+            print('HTTPException')
+        return ret
+    
+    def _http_file_info(self, url):
+        request = urllib2.Request(url)
+        request.get_method = lambda : 'HEAD'
+        try:
+            response = urllib2.urlopen(request)
+            ret = response.info()
+        except urllib2.HTTPError as e:
+            ret = None
+            print('HTTPError = ' + str(e.code))
+        except urllib2.URLError as e:
+            ret = None
+            print('URLError = ' + str(e.reason))
+        except httplib.HTTPException as e:
+            ret = None
+            print('HTTPException')
+        return ret
+    
+    def _download(self, filename):
+        try:
+            zip_file_obj = open(zip_file, 'w')
+            ret = self._http_download_file(self.DOWNLOAD_ZIP_URL, zip_file_obj)
+            zip_file_obj.close()
+        except IOError as e:
+            ret = False
+        return ret
+    
+    def _install(self, filename):
+        return self._unpack(filename)
+
+    @staticmethod
+    def _unpack_filter(directory, filenames):
+        ret = []
+        for f in logmx_installer.CONFIG_DIRS:
+            if f in filenames:
+                ret.append(f)
+        for f in logmx_installer.CONFIG_FILES:
+            if f in filenames:
+                ret.append(f)
+        return ret
+    
+    def _unpack(self, zip_file):
+        if not os.path.exists(self._appdir):
+            os.makedirs(self._appdir)
+        if not os.path.exists(self._appbindir):
+            os.makedirs(self._appbindir)
+        if not os.path.exists(self._appconfdir):
+            os.makedirs(self._appconfdir)
+    
+        # create directories in /etc/logmx
+        for f in logmx_installer.CONFIG_DIRS:
+            d = os.path.join(self._appconfdir, f)
+            if not os.path.exists(d):
+                os.makedirs(d)
+            l = os.path.join(self._appdir, f)
+            if not os.path.islink(l):
+                if not os.path.exists(l):
+                    os.symlink(os.path.relpath(d, l), l)
+        for f in logmx_installer.CONFIG_FILES:
+            d = os.path.join(self._appconfdir, f)
+            l = os.path.join(self._appdir, f)
+            if not os.path.islink(l):
+                if not os.path.exists(l):
+                    os.symlink(os.path.relpath(d, l), l)
+
+        tmpdir = tempfile.mkdtemp()
+
+        try:
+            with ZipFile(zip_file, 'r', allowZip64=False) as myzip:
+                myzip.extractall(tmpdir)
+            ret = True
+        except BadZipfile as e:
+            ret = False
+            print(('zipfile failed ' + str(e)))
+        if ret:
+            for f in os.listdir(tmpdir):
+                src = os.path.join(tmpdir, f)
+                copytree(src, self._appdir, ignore=self._unpack_filter)
+                
+                for f in logmx_installer.CONFIG_DIRS:
+                    src_config = os.path.join(src, f)
+                    if os.path.exists(src_config):
+                        copytree(src_config, os.path.join(self._appconfdir, f))
+                for f in logmx_installer.CONFIG_FILES:
+                    src_startup_conf = os.path.join(src, f)
+                    if os.path.exists(src_startup_conf):
+                        shutil.copy2(src_startup_conf, os.path.join(self._appconfdir, f))
+            if platform.system() == 'Windows':
+                pass
+            elif platform.system() == 'Linux':
+                for f in logmx_installer.MACOSX_FILES:
+                    d = os.path.join(self._appdir, f)
+                    if os.path.exists(d):
+                        os.remove(d)
+                for f in logmx_installer.WINDOWS_FILES:
+                    d = os.path.join(self._appdir, f)
+                    if os.path.exists(d):
+                        os.remove(d)
+
+                logmx_sh_path = os.path.join(self._appdir, 'logmx.sh')
+                os.remove(logmx_sh_path)
+
+                logmx_sh_path = os.path.join(self._installer_dir, 'logmx.sh')
+                logmx_sh_path_final = os.path.join(self._appbindir, 'logmx')
+                shutil.copy(logmx_sh_path, logmx_sh_path_final)
+                os.chmod(logmx_sh_path_final, 0o755)
+        return ret
+
+    def main(self):
+        #=============================================================================================
+        # process command line
+        #=============================================================================================
+        parser = argparse.ArgumentParser(description='downloads the latest LogMX and installs it locally.')
+        parser.add_argument('-v', '--verbose', dest='verbose', action='store_true', help='enable verbose output of this script.')
+        parser.add_argument('action', choices=['info', 'update', 'remove', 'purge', 'download', 'install'], help='sepcify the action to execute')
+        parser.add_argument('-f', '--force', dest='force', action='store_true', help='force action and do not ask for confirmation.')
+        parser.add_argument('--source', dest='source', help='override the source url')
+        parser.add_argument('--dest', dest='dest', help='destination directory')
+
+        args = parser.parse_args()
+
+        self._verbose = args.verbose
+        self._force = args.force
+        self._set_root_dir(args.dest)
+
+        ret = 0
+        if args.action == 'info':
+            if not self._info():
+                ret = 1
+            else:
+                ret = 0
+        elif args.action == 'update':
+            if not self._update():
+                ret = 1
+            else:
+                ret = 0
+        elif args.action == 'purge':
+            if not self._remove(purge=True):
+                ret = 1
+            else:
+                ret = 0
+        elif args.action == 'remove':
+            if not self._remove(purge=False):
+                ret = 1
+            else:
+                ret = 0
+        elif args.action == 'download':
+            if not self._download(args.download):
+                ret = 1
+            else:
+                ret = 0
+        elif  args.action == 'install':
+            if not self._install(args.install):
+                ret = 1
+            else:
+                ret = 0
+
+        return ret
+
+if __name__ == "__main__":
+    app =  logmx_installer()
+    sys.exit(app.main())

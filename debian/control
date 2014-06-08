@@ -1,0 +1,14 @@
+Source: arsoft-logmx
+Section: admin
+Priority: optional
+Maintainer: Andreas Roth <aroth@arsoft-online.com>
+Standards-Version: 3.9.5
+Build-Depends: debhelper (>= 8), python (>= 2.7), arsoft-python
+XS-Python-Version: >=2.7
+
+Package: arsoft-logmx
+Architecture: all
+Depends: ${misc:Depends}
+Description: LogMX - The universal log viewer
+ LogMX is an intuitive and easy-to-use cross platform tool for developers
+ and administrators working with log and trace files.

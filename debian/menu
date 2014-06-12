@@ -1,5 +1,0 @@
-?package(arsoft-logmx):needs="x11" \
-  section="Applications/System/Monitoring" \
-  title="LogMX" \
-  command="/usr/bin/logmx" \
-  icon="/usr/lib/logmx/logmx_logo_32x32.png"

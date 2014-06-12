@@ -81,6 +81,10 @@ def copytree(src, dst, symlinks=False, ignore=None):
     if errors:
         raise Error(errors)
 
+def mkdirp(directory):
+    if not os.path.isdir(directory):
+        os.makedirs(directory)
+
 class logmx_installer(object):
     
     LOGMX_SERVER = 'http://www.logmx.com'
@@ -97,6 +101,11 @@ class logmx_installer(object):
     CONFIG_FILES = ['startup.conf']
     MACOSX_FILES = ['logmx.command']
     WINDOWS_FILES = ['LogMX.exe', 'LogMX-64.exe', 'LogMX.bat']
+    ICON_FILES = [ (16, 'logmx_logo_16x16.png', 'apps', 'logmx_logo'),
+                   (20, 'logmx_logo_20x20.png', 'apps', 'logmx_logo'),
+                   (22, 'logmx_logo_22x22.png', 'apps', 'logmx_logo'),
+                   (32, 'logmx_logo_32x32.png', 'apps', 'logmx_logo'),
+                   (48, 'logmx_logo_48x48.png', 'apps', 'logmx_logo') ]
 
     def __init__(self):
         self._verbose = False
@@ -109,6 +118,7 @@ class logmx_installer(object):
         self._appconfdir = os.path.join(self._rootdir, 'etc/logmx')
         self._state_inifile = os.path.join(self._statedir, 'version.conf')
         self._appbindir = os.path.join(self._rootdir, 'usr/bin')
+        self._icon_dir = os.path.join(self._rootdir, 'usr/share/icons/hicolor')
 
     @staticmethod
     def _parse_version_string(version_str):
@@ -382,6 +392,14 @@ class logmx_installer(object):
                     d = os.path.join(self._appdir, f)
                     if os.path.exists(d):
                         os.remove(d)
+
+                icon_dir = ''
+                for (icon_res, icon_file, icon_subdir, icon_name) in logmx_installer.ICON_FILES:
+                    icon_src = os.path.join(self._appdir, 'pics', icon_file)
+                    (icon_file_base, icon_file_ext) = os.path.splitext(icon_file)
+                    icon_dest = os.path.join(self._icon_dir, '%ix%i' % (icon_res, icon_res), icon_subdir, icon_name + icon_file_ext)
+                    mkdirp(os.path.dirname(icon_dest))
+                    shutil.copy(icon_src, icon_dest)
 
                 logmx_sh_path = os.path.join(self._appdir, 'logmx.sh')
                 os.remove(logmx_sh_path)

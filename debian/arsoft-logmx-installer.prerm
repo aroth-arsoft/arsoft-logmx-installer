@@ -1,9 +1,0 @@
-#!/bin/sh -e
-
-/usr/bin/logmx-update --purge
-
-#DEBHELPER#
-
-exit 0
-
-# vim: ts=2 sw=2

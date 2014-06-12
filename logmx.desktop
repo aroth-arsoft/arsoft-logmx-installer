@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=LogMX
+Categories=Java;System;Monitor;
+Exec=logmx
+Icon=logmx_logo
+Type=Application
+X-DocPath=ksystemlog/index.html
+Comment=The Universal Log Viewer
+Terminal=false
+GenericName=The Universal Log Viewer

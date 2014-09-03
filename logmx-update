@@ -92,7 +92,7 @@ class logmx_installer(object):
     DOWNLOAD_ZIP_URL = LOGMX_SERVER + '/download_file.php?id=0'
 
     RE_LAST_VERSION =re.compile(
-            r'^.*<SPAN\s+.*>Last version:\s*<A\s+.*>\s*<span\s+.*>v(?P<version>[0-9\.]+)\s*</span>\s*\(<span\s+.*>(?P<date>[\w \.]+)</span>\)</A>.*</SPAN>.*$'
+            r'^.*<span\s+itemprop="softwareVersion">v(?P<version>[0-9\.]+)\s*</span>\s*\(<span\s+itemprop="datePublished">(?P<date>[\w \.]+)</span>.*$'
             )
     RE_LAST_VERSION_ =re.compile(
             r'^.*<SPAN\s+.*>Last version:\s*<A\s+.*>.*</A></SPAN>.*$'
@@ -161,7 +161,7 @@ class logmx_installer(object):
                     #print('got mo: ' + str(mo))
                     version = mo.group('version')
                     release_date_str = mo.group('date')
-                    t = mktime(strptime(release_date_str, "%d %b %Y"))
+                    t = mktime(strptime(release_date_str, "%d %B %Y"))
                     release_date = date.fromtimestamp(t)
             ret = True
         except urllib2.HTTPError as e:
